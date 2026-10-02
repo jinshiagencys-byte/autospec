@@ -75,7 +75,8 @@ export function getModel({
     if (
         modelName === "cloudflare" ||
         modelName.startsWith("cloudflare:") ||
-        modelName.startsWith("cloudflare/")
+        modelName.startsWith("cloudflare/") ||
+        modelName.startsWith("@cf/")
     ) {
         return getCloudflareModelConfig(modelName, apiKey);
     }
@@ -83,7 +84,7 @@ export function getModel({
     const factory = configs[modelName];
     if (!factory) {
         throw new Error(
-            `Unknown model: ${modelName}. Supported: ${Object.keys(configs).join(", ")}, cloudflare, cloudflare:<model>`,
+            `Unknown model: ${modelName}. Supported: ${Object.keys(configs).join(", ")}, cloudflare, cloudflare:<model>, @cf/<model>`,
         );
     }
     return factory();
