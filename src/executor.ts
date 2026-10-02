@@ -2,7 +2,7 @@ import { z } from "zod";
 import { generateText, tool, stepCountIs, hasToolCall } from "ai";
 import { Browser } from "playwright";
 import { ModelInstance } from "./ai.js";
-import { initializeBrowser, getAccessibilitySnapshot } from "./browser.js";
+import { initializeBrowser, getAccessibilitySnapshot, saveScreenshot, gotoPage } from "./browser.js";
 import { magicStrings, type TestResult, type ActionRecord } from "./schemas.js";
 
 const executionSystemPrompt = `
@@ -149,8 +149,7 @@ function createBrowserTools(page: import("playwright").Page) {
                 url: z.string().describe("The URL to navigate to."),
             }),
             execute: async ({ url }) => {
-                await page.goto(url);
-                await page.waitForTimeout(300);
+                await gotoPage(page, url);
                 return {
                     success: true,
                     snapshot: await getAccessibilitySnapshot(page),
@@ -254,7 +253,7 @@ export async function runTestSpec({
     let totalOutputTokens = 0;
 
     try {
-        await page.goto(testUrl);
+        await gotoPage(page, testUrl);
         await page.waitForTimeout(300);
 
         const initialSnapshot = await getAccessibilitySnapshot(page);
