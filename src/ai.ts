@@ -22,7 +22,6 @@ function getCloudflareToken(apiKey?: string) {
 function getCloudflareModelConfig(modelName: string, apiKey?: string) {
     const cloudflareApiKey = getCloudflareToken(apiKey);
     const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
-    const gateway = process.env.CLOUDFLARE_GATEWAY;
     const defaultModel =
         process.env.CLOUDFLARE_MODEL ||
         "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
@@ -39,20 +38,14 @@ function getCloudflareModelConfig(modelName: string, apiKey?: string) {
         );
     }
 
-    if (!gateway) {
-        throw new Error(
-            "Cloudflare model selected but CLOUDFLARE_GATEWAY is missing. Example: my-gateway",
-        );
-    }
-
     const resolvedModel =
-        modelName === "cloudflare"
+        modelName === "cloudflare" || modelName === "@cf/zai-org/glm-4.7-flash"
             ? defaultModel
-            : modelName.replace(/^cloudflare[:/]/, "");
+            : modelName.replace(/^cloudflare[:/]/, "").replace(/^@cf\//, "@cf/");
 
     return createOpenAI({
         apiKey: cloudflareApiKey,
-        baseURL: `https://gateway.ai.cloudflare.com/v1/${accountId}/${gateway}`,
+        baseURL: `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run`,
     })(resolvedModel);
 }
 
