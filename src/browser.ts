@@ -28,12 +28,19 @@ export async function initializeBrowser({
             : {}),
     });
 
-    context.setDefaultTimeout(5000);
+    context.setDefaultTimeout(30000);
     const page = await context.newPage();
 
     preventBrowserFromNavigatingToOtherHosts({ page, testUrl });
 
     return { browser, context, page };
+}
+
+export async function gotoPage(page: Page, url: string) {
+    await page.goto(url, {
+        waitUntil: "domcontentloaded",
+        timeout: 30000,
+    });
 }
 
 function preventBrowserFromNavigatingToOtherHosts({
