@@ -27,20 +27,31 @@ if (args.includes("--help") || args.includes("-h")) {
                           * "claude-opus-4-6" (default)
                           * "gpt-5.4"
                           * "gemini-2.5-flash"
+                          * "cloudflare" or "cloudflare:<model-name>"
     --apikey <key>       The relevant API key for the chosen model's API.
                           * If not specified, we'll fall back on the
                             following environment variables:
                             * OPENAI_API_KEY
                             * GOOGLE_GENERATIVE_AI_API_KEY
                             * ANTHROPIC_API_KEY
+                            * CLOUDFLARE_API_TOKEN / CLOUDFLARE_API_KEY
     --specFile <file>    Path to the file containing specs to run.
                          Use "-" to read from stdin.
+    Cloudflare requirements:
+      CLOUDFLARE_ACCOUNT_ID
+      CLOUDFLARE_GATEWAY
+      CLOUDFLARE_MODEL (optional, default: @cf/meta/llama-3.3-70b-instruct-fp8-fast)
     `);
     process.exit(0);
 }
 
 const getInteractiveInput = async () => {
-    const models = ["claude-opus-4-6", "gpt-5.4", "gemini-2.5-flash"];
+    const models = [
+        "claude-opus-4-6",
+        "gpt-5.4",
+        "gemini-2.5-flash",
+        "cloudflare",
+    ];
 
     const testUrl = await input({
         message: "Enter the target URL:",
