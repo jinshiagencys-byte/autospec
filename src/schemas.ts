@@ -9,10 +9,16 @@ export const testPlanSchema = z.object({
     arrayOfSpecs: z.array(z.string()),
 });
 
-export const modelNameSchema = z.enum([
-    "gpt-5.4",
-    "claude-opus-4-6",
-    "gemini-2.5-flash",
+export const modelNameSchema = z.union([
+    z.enum([
+        "gpt-5.4",
+        "claude-opus-4-6",
+        "gemini-2.5-flash",
+        "cloudflare",
+    ]),
+    z.string().startsWith("cloudflare:"),
+    z.string().startsWith("cloudflare/"),
+    z.string().startsWith("@cf/"),
 ]);
 export type ModelName = z.infer<typeof modelNameSchema>;
 
