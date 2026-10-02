@@ -46,7 +46,6 @@ function getCloudflareModelConfig(modelName: string, apiKey?: string) {
     return createOpenAI({
         apiKey: cloudflareApiKey,
         baseURL: `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/v1`,
-        compatibility: "strict",
     })(resolvedModel);
 }
 
