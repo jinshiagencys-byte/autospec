@@ -2,7 +2,7 @@ import { Page } from "playwright";
 import { generateText, Output } from "ai";
 import { testPlanSchema } from "./schemas.js";
 import { ModelInstance } from "./ai.js";
-import { getAccessibilitySnapshot, saveScreenshot } from "./browser.js";
+import { getAccessibilitySnapshot, saveScreenshot, gotoPage } from "./browser.js";
 
 export async function visitPages({
     page,
@@ -15,7 +15,7 @@ export async function visitPages({
     testUrl: string;
     trajectoriesPath: string;
 }): Promise<string[]> {
-    await page.goto(testUrl);
+    await gotoPage(page, testUrl);
     await page.waitForTimeout(500);
 
     const snapshots: string[] = [];
@@ -29,7 +29,7 @@ export async function visitPages({
         urlsToVisit.delete(url);
         urlsAlreadyVisited.add(url);
 
-        await page.goto(url);
+        await gotoPage(page, url);
         await page.waitForTimeout(300);
 
         await saveScreenshot({
