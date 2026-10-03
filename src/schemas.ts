@@ -27,12 +27,14 @@ export const modelNameSchema = z.union([
         "gemini-2.5-flash",
         "cloudflare",
         "opencode",
+        "ollama",
     ]),
     z.string().startsWith("cloudflare:"),
     z.string().startsWith("cloudflare/"),
     z.string().startsWith("@cf/"),
     z.string().startsWith("opencode:"),
     z.string().startsWith("opencode/"),
+    z.string().startsWith("ollama:"),
 ]);
 export type ModelName = z.infer<typeof modelNameSchema>;
 
