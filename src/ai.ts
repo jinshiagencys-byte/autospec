@@ -80,6 +80,40 @@ function formatCloudflareMessages(prompt: unknown): string {
     return getCloudflarePromptText(prompt);
 }
 
+function skeleton(s: any): any {
+    if (!s) return null;
+    switch (s.type) {
+        case "object":
+            return Object.fromEntries(
+                Object.entries(s.properties ?? {}).map(([k, v]) => [k, skeleton(v)]),
+            );
+        case "array":
+            return [skeleton(s.items)];
+        case "string":
+            return "...";
+        case "number":
+        case "integer":
+            return 0;
+        case "boolean":
+            return false;
+        default:
+            return null;
+    }
+}
+
+function unwrapEchoedSchema(text: string): string {
+    try {
+        const obj = JSON.parse(text);
+        if (obj?.type === "object" && obj.properties && typeof obj.properties === "object") {
+            const looksLikeData = Object.values(obj.properties).some(
+                (v) => Array.isArray(v) || typeof v === "string",
+            );
+            if (looksLikeData) return JSON.stringify(obj.properties);
+        }
+    } catch {}
+    return text;
+}
+
 function getCloudflareModelConfig(modelName: string, apiKey?: string) {
     const cloudflareApiKey = getCloudflareToken(apiKey);
     const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
@@ -125,8 +159,9 @@ function getCloudflareModelConfig(modelName: string, apiKey?: string) {
             const schema = responseFormat?.type === "json" ? responseFormat.schema : undefined;
             if (schema) {
                 messages[messages.length - 1].content +=
-                    "\n\nRéponds UNIQUEMENT avec un objet JSON valide conforme à ce schéma, " +
-                    "sans texte ni markdown autour :\n" + JSON.stringify(schema);
+                    "\n\nRéponds UNIQUEMENT avec un objet JSON de cette forme exacte, " +
+                    "en remplaçant les valeurs par ton contenu (ne recopie pas de schéma, " +
+                    "pas de markdown, pas de texte autour) :\n" + JSON.stringify(skeleton(schema));
             }
 
             const response = await fetch(
@@ -170,6 +205,7 @@ function getCloudflareModelConfig(modelName: string, apiKey?: string) {
                 const start = text.indexOf("{");
                 const end = text.lastIndexOf("}");
                 if (start !== -1 && end > start) text = text.slice(start, end + 1);
+                text = unwrapEchoedSchema(text);
             }
 
             const finish = choice?.finish_reason ?? "stop";
