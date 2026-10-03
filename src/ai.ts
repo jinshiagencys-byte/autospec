@@ -116,8 +116,18 @@ function getCloudflareModelConfig(modelName: string, apiKey?: string) {
         modelId: resolvedModel,
         supportedUrls: {},
 
-        async doGenerate({ prompt }: { prompt: unknown }) {
-            const fullPrompt = formatCloudflareMessages(prompt);
+        async doGenerate({ prompt, maxOutputTokens, temperature, responseFormat }: any) {
+            const messages = (Array.isArray(prompt) ? prompt : [prompt]).map((m: any) => ({
+                role: m?.role || "user",
+                content: getCloudflarePromptText(m?.content ?? m),
+            }));
+
+            const schema = responseFormat?.type === "json" ? responseFormat.schema : undefined;
+            if (schema) {
+                messages[messages.length - 1].content +=
+                    "\n\nRéponds UNIQUEMENT avec un objet JSON valide conforme à ce schéma, " +
+                    "sans texte ni markdown autour :\n" + JSON.stringify(schema);
+            }
 
             const response = await fetch(
                 `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/${resolvedModel}`,
@@ -127,37 +137,58 @@ function getCloudflareModelConfig(modelName: string, apiKey?: string) {
                         Authorization: `Bearer ${cloudflareApiKey}`,
                         "Content-Type": "application/json",
                     },
-                    body: JSON.stringify({ prompt: fullPrompt }),
+                    body: JSON.stringify({
+                        messages,
+                        max_tokens: maxOutputTokens ?? 8192,
+                        ...(temperature !== undefined && { temperature }),
+                    }),
                 },
             );
 
             const data = await response.json();
-
             if (!response.ok || !data?.success) {
-                const message =
+                throw new Error(
                     data?.errors?.[0]?.message ||
-                    data?.error?.message ||
-                    `Cloudflare request failed with status ${response.status}`;
-                throw new Error(message);
+                        data?.error?.message ||
+                        `Cloudflare request failed with status ${response.status}`,
+                );
             }
 
+            const result = data.result;
+            const choice = result?.choices?.[0];
             const raw =
-                data?.result?.response ??
-                data?.result?.text ??
-                data?.result ??
+                choice?.message?.content ??
+                choice?.text ??
+                result?.response ??
+                result?.text ??
                 "";
-            const text = typeof raw === "string" ? raw : JSON.stringify(raw);
+            let text = typeof raw === "string" ? raw : JSON.stringify(raw);
+
+            text = text.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+
+            if (schema) {
+                const start = text.indexOf("{");
+                const end = text.lastIndexOf("}");
+                if (start !== -1 && end > start) text = text.slice(start, end + 1);
+            }
+
+            const finish = choice?.finish_reason ?? "stop";
+            if (finish === "length") {
+                console.error(
+                    `⚠ Réponse tronquée (completion_tokens=${result?.usage?.completion_tokens})`,
+                );
+            }
 
             return {
                 content: [{ type: "text", text }],
-                finishReason: "stop",
+                finishReason: finish === "length" ? "length" : "stop",
                 usage: {
-                    inputTokens: undefined,
-                    outputTokens: undefined,
-                    totalTokens: undefined,
+                    inputTokens: result?.usage?.prompt_tokens,
+                    outputTokens: result?.usage?.completion_tokens,
+                    totalTokens: result?.usage?.total_tokens,
                 },
                 warnings: [],
-                request: { body: fullPrompt },
+                request: { body: messages },
                 response: { body: data },
             };
         },
