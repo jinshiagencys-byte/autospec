@@ -302,6 +302,24 @@ function getCloudflareModelConfig(modelName: string, apiKey?: string): ModelInst
     return wrapModelWithToolCheck(baseModel, "Cloudflare");
 }
 
+function getOllamaModelConfig(modelName: string, apiKey?: string): ModelInstance {
+    const token = apiKey || process.env.OLLAMA_API_KEY;
+    const defaultModel = process.env.OLLAMA_MODEL || "gpt-oss:120b";
+    const resolvedModel =
+        modelName === "ollama" ? defaultModel : modelName.replace(/^ollama:/, "");
+
+    if (!token) {
+        throw new Error("OLLAMA_API_KEY manquant.");
+    }
+
+    const baseModel = createOpenAI({
+        apiKey: token,
+        baseURL: "https://ollama.com/v1",
+    }).chat(resolvedModel);
+
+    return wrapModelWithToolCheck(baseModel, "Ollama");
+}
+
 export function getModel({
     modelName,
     apiKey,
@@ -322,6 +340,11 @@ export function getModel({
     // Handle OpenCode models
     if (isOpenCodeModelName(modelName)) {
         return getOpenCodeModelConfig(modelName);
+    }
+
+    // Handle Ollama models
+    if (modelName === "ollama" || modelName.startsWith("ollama:")) {
+        return getOllamaModelConfig(modelName, apiKey);
     }
 
     // Handle Gemini models (supports dynamic model names like "gemini-3.1-flash-lite")
@@ -346,7 +369,7 @@ export function getModel({
     const factory = configs[modelName];
     if (!factory) {
         throw new Error(
-            `Unknown model: ${modelName}. Supported: gpt-5.4, claude-opus-4-6, gemini-2.5-flash, gemini-3.1-flash-lite (or any gemini-*), cloudflare, cloudflare:<model>, @cf/<model>, opencode, opencode:<model>`,
+            `Unknown model: ${modelName}. Supported: gpt-5.4, claude-opus-4-6, gemini-2.5-flash, gemini-3.1-flash-lite (or any gemini-*), cloudflare, cloudflare:<model>, @cf/<model>, opencode, opencode:<model>, ollama, ollama:<model>`,
         );
     }
     return factory();
