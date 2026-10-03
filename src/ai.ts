@@ -202,7 +202,7 @@ function getOpenCodeModelConfig(modelName: string): ModelInstance {
                 const cwd = mkdtempSync(join(tmpdir(), "autospec-opencode-"));
                 try {
                     const args = ["run", "-m", resolvedModel];
-                    if (supportsJsonOutput()) {
+                    if (supportsOpenCodeJsonOutput()) {
                         args.push("--output", "json");
                     }
 
