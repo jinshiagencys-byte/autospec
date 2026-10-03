@@ -91,10 +91,19 @@ export async function createTestPlan({
         throw new Error("Failed to generate test plan — no output returned");
     }
 
-    const testPlan = output.arrayOfSpecs;
-    if (!Array.isArray(testPlan) || testPlan.length === 0) {
+    const rawSpecs = output.arrayOfSpecs;
+    if (!Array.isArray(rawSpecs) || rawSpecs.length === 0) {
         throw new Error("Test plan is empty or invalid");
     }
+
+    // Extract titles from specs (handle both string and object formats)
+    const testPlan = rawSpecs.map((spec) => {
+        if (typeof spec === "string") {
+            return spec;
+        }
+        // spec is an object with title property
+        return spec.title;
+    });
 
     return {
         testPlan,
