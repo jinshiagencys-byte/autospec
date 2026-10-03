@@ -1,327 +1,153 @@
-name: AutoSpec Playwright - Génération E2E Tests
+#!/usr/bin/env node
+import { main } from "./index.js";
+import { input, select } from "@inquirer/prompts";
+import { createRequire } from "module";
 
-on:
-  workflow_dispatch:
-    inputs:
-      model:
-        description: "Modèle forcé : cloudflare, opencode:big-pickle, opencode:nemotron-3-ultra-free, gemini-2.5-flash"
-        required: false
-        type: choice
-        options:
-          - cloudflare
-          - opencode:big-pickle
-          - opencode:nemotron-3-ultra-free
-          - gemini-2.5-flash
-      plan_model:
-        description: "Modèle de planification (optionnel, défaut=--model)"
-        required: false
-        type: choice
-        options:
-          - ""
-          - gemini-2.5-flash
-          - gemini-3.1-flash-lite
-          - cloudflare
-      url:
-        description: "URL cible à tester (optionnel, sinon récupère du relay)"
-        required: false
-        type: string
-      site_id:
-        description: "Site ID du relay (optionnel)"
-        required: false
-        type: string
-      spec_limit:
-        description: "Nombre max de specs à générer"
-        required: false
-        default: "10"
-        type: string
-  schedule:
-    # Génération de tests tous les jours à 6h du matin
-    - cron: "0 6 * * *"
+const require = createRequire(import.meta.url);
+const { version } = require("../../package.json");
 
-permissions:
-  contents: read
-  checks: write
+const args = process.argv.slice(2);
 
-env:
-  NODE_VERSION: "22"
-  SPEC_CONCURRENCY: "3"
-  GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-  GOOGLE_GENERATIVE_AI_API_KEY: ${{ secrets.GOOGLE_GENERATIVE_AI_API_KEY }}
-  CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-  CLOUDFLARE_AUTH_TOKEN: ${{ secrets.CLOUDFLARE_AUTH_TOKEN }}
-  CLOUDFLARE_MODEL: "@cf/zai-org/glm-4.7-flash"
+const getArgValue = <T>(argName: string, defaultValue: T) => {
+    const index = args.indexOf(argName);
+    return index !== -1 ? args[index + 1] : defaultValue;
+};
 
-jobs:
-  # ============================================================
-  # 1. RÉSOUDRE L'URL CIBLE
-  # ============================================================
-  resolve-url:
-    runs-on: ubuntu-latest
-    outputs:
-      url: ${{ steps.resolve.outputs.url }}
-      site_id: ${{ steps.resolve.outputs.site_id }}
-      site_name: ${{ steps.resolve.outputs.site_name }}
-    steps:
-      - name: Résoudre l'URL depuis les inputs ou le relay
-        id: resolve
-        env:
-          INPUT_URL: ${{ github.event.inputs.url }}
-          INPUT_SITE_ID: ${{ github.event.inputs.site_id }}
-          RELAY_URL: ${{ secrets.RELAY_URL }}
-          RELAY_SECRET: ${{ secrets.RELAY_SECRET }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          
-          # Priorité 1 : URL directe en input
-          if [ -n "${INPUT_URL:-}" ]; then
-            echo "url=$INPUT_URL" >> "$GITHUB_OUTPUT"
-            echo "site_id=manual-$RANDOM" >> "$GITHUB_OUTPUT"
-            echo "site_name=${INPUT_URL##*/}" >> "$GITHUB_OUTPUT"
-            echo "✓ URL cible (input) : $INPUT_URL"
-            exit 0
-          fi
-          
-          # Priorité 2 : Site ID via relay
-          if [ -n "${INPUT_SITE_ID:-}" ]; then
-            if [ -z "${RELAY_URL:-}" ]; then
-              echo "::error::RELAY_URL manquant pour résoudre site_id"
-              exit 1
-            fi
-            SITE=$(curl -fsS --retry 3 -H "x-relay-secret: $RELAY_SECRET" \
-              "$RELAY_URL/sites/$INPUT_SITE_ID")
-            URL=$(echo "$SITE" | jq -r '.site_url // .url // empty')
-            NAME=$(echo "$SITE" | jq -r '.site_name // .name // "unknown"')
-            if [ -z "$URL" ]; then
-              echo "::error::site_id=$INPUT_SITE_ID introuvable ou sans URL"
-              exit 1
-            fi
-            echo "url=$URL" >> "$GITHUB_OUTPUT"
-            echo "site_id=$INPUT_SITE_ID" >> "$GITHUB_OUTPUT"
-            echo "site_name=$NAME" >> "$GITHUB_OUTPUT"
-            echo "✓ URL résolue depuis relay : $URL (site=$NAME)"
-            exit 0
-          fi
-          
-          # Priorité 3 : Premier site actif du relay
-          if [ -n "${RELAY_URL:-}" ]; then
-            SITES=$(curl -fsS --retry 3 -H "x-relay-secret: $RELAY_SECRET" \
-              "$RELAY_URL/active-sites" | jq -c '.sites[]? | select(.site_url != null)' | head -1)
-            if [ -z "$SITES" ]; then
-              echo "::error::Aucun site actif trouvé dans le relay"
-              exit 1
-            fi
-            URL=$(echo "$SITES" | jq -r '.site_url // .url')
-            SID=$(echo "$SITES" | jq -r '.id // "unknown"')
-            NAME=$(echo "$SITES" | jq -r '.site_name // .name // "unknown"')
-            echo "url=$URL" >> "$GITHUB_OUTPUT"
-            echo "site_id=$SID" >> "$GITHUB_OUTPUT"
-            echo "site_name=$NAME" >> "$GITHUB_OUTPUT"
-            echo "✓ URL du premier site actif : $URL"
-            exit 0
-          fi
-          
-          echo "::error::Aucune URL trouvée (input, site_id, ou relay requis)"
-          exit 1
+if (args.includes("--help") || args.includes("-h")) {
+    console.log(`
+    Usage: npx autospecai --url <url> [--model <model>] [--plan_model <model>] [--spec_limit <limit>] [--specFile <file>] [--trajectories-path <path>] [--help | -h]
 
-  # ============================================================
-  # 2. GÉNÉRER & EXÉCUTER LES SPECS AVEC AUTOSPEC
-  # ============================================================
-  autospec-run:
-    needs: resolve-url
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+    Required:
+    --url <url>          The target URL to run the autospec tests against.
 
-      - name: Checkout autospec source
-        uses: actions/checkout@v4
-        with:
-          repository: jinshiagencys-byte/autospec
-          ref: main
-          path: autospec
+    Optional:
+    --help, -h           Show this help message.
+    --spec_limit <limit> The max number of specs to generate. Default 10.
+    --trajectories-path <path> Path to store trajectories, videos, and specs. Default: ./trajectories
+    --model <model>      The model to use for test execution (with tool calling support)
+                          * "claude-opus-4-6" (default)
+                          * "gpt-5.4"
+                          * "gemini-2.5-flash" or "gemini-3.1-flash-lite"
+                          * "cloudflare" or "cloudflare:<model-name>"
+                          * "opencode" or "opencode:<model-name>" (default: big-pickle)
+    --plan_model <model> The model to use for test planning only (no tool calling required).
+                          If not provided, defaults to --model.
+                          Useful for cheaper models: "gemini-2.5-flash", etc.
+    --apikey <key>       The relevant API key for the execution model's API.
+                          * If not specified, we'll fall back on the
+                            following environment variables:
+                            * OPENAI_API_KEY (for gpt-5.4)
+                            * GOOGLE_GENERATIVE_AI_API_KEY (for gemini-*)
+                            * ANTHROPIC_API_KEY (for claude-*)
+                            * CLOUDFLARE_AUTH_TOKEN (for cloudflare)
+                            * OPENCODE_MODEL (no API key required for opencode)
+    --specFile <file>    Path to the file containing specs to run.
+                         Use "-" to read from stdin.
+        Cloudflare requirements:
+            CLOUDFLARE_ACCOUNT_ID
+            CLOUDFLARE_AUTH_TOKEN
+            CLOUDFLARE_MODEL (optional, default: @cf/meta/llama-3.1-8b-fast-v2)
+        OpenCode requirements:
+            npm install -g opencode-ai
+            OPENCODE_MODEL (optional, default: big-pickle)
+    `);
+    process.exit(0);
+}
 
-      - name: Setup Node.js ${{ env.NODE_VERSION }}
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
+const getInteractiveInput = async () => {
+    const models = [
+        "claude-opus-4-6",
+        "gpt-5.4",
+        "gemini-2.5-flash",
+        "cloudflare",
+        "opencode",
+    ];
 
-      - name: Install autospec dependencies
-        working-directory: autospec
-        run: |
-          corepack enable
-          pnpm install --frozen-lockfile
+    const testUrl = await input({
+        message: "Enter the target URL:",
+    });
 
-      - name: Install OpenCode CLI
-        run: npm install -g opencode-ai
+    const modelName = await select({
+        message: "Choose a model:",
+        choices: models.map((model) => ({ name: model, value: model })),
+        default: models[0],
+    });
 
-      - name: Build autospec
-        working-directory: autospec
-        run: |
-          pnpm build
+    const specLimit = await input({
+        message: "Enter the spec limit (default: 10):",
+        default: "10",
+    });
 
-      - name: Install Playwright browsers
-        working-directory: autospec
-        run: |
-          npx playwright install --with-deps chromium
+    const apiKey = await input({
+        message: "Enter the API key:",
+    });
 
-      - name: Créer dossier trajectories
-        run: |
-          mkdir -p trajectories
+    const specFile = await input({
+        message: "Enter the spec file path (or leave blank):",
+    });
 
-      - name: Exécuter autospec
-        id: autospec
-        env:
-          TARGET_URL: ${{ needs.resolve-url.outputs.url }}
-          SITE_ID: ${{ needs.resolve-url.outputs.site_id }}
-          SITE_NAME: ${{ needs.resolve-url.outputs.site_name }}
-          SPEC_LIMIT: ${{ github.event.inputs.spec_limit || '10' }}
-          FORCE_MODEL: ${{ github.event.inputs.model || '' }}
-          PLAN_MODEL_INPUT: ${{ github.event.inputs.plan_model || '' }}
-          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-          GOOGLE_GENERATIVE_AI_API_KEY: ${{ secrets.GOOGLE_GENERATIVE_AI_API_KEY }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_AUTH_TOKEN: ${{ secrets.CLOUDFLARE_AUTH_TOKEN }}
-          CLOUDFLARE_MODEL: "@cf/zai-org/glm-4.7-flash"
-        shell: bash
-        run: |
-          set +e  # Continuer même en cas d'erreur
-          set -o pipefail
+    return {
+        testUrl,
+        modelName,
+        planModelName: undefined,
+        specLimit: parseInt(specLimit, 10) || 10,
+        apiKey,
+        specFile: specFile || undefined,
+        trajectoriesPath: undefined,
+    };
+};
 
-          echo "🎯 Cible : $TARGET_URL"
-          echo "📈 Specs max : $SPEC_LIMIT"
+const getVars = async () => {
+    if (!getArgValue("--url", null)) {
+        console.warn("No URL provided. Entering interactive mode...");
+        return await getInteractiveInput();
+    } else {
+        return {
+            testUrl: getArgValue<string | undefined>("--url", undefined),
+            modelName: getArgValue<string | undefined>(
+                "--model",
+                "claude-opus-4-6",
+            ),
+            planModelName: getArgValue<string | undefined>(
+                "--plan_model",
+                undefined,
+            ),
+            specLimit: getArgValue<string | number>("--spec_limit", 10),
+            apiKey: getArgValue<string | undefined>("--apikey", undefined),
+            specFile: getArgValue<string | undefined>("--specFile", undefined),
+            trajectoriesPath: getArgValue<string | undefined>(
+                "--trajectories-path",
+                undefined,
+            ),
+        };
+    }
+};
 
-          if [ -n "${FORCE_MODEL:-}" ]; then
-            echo "✓ Forced model override: ${FORCE_MODEL}"
-            MODEL_VALUE="${FORCE_MODEL}"
-          elif [ -n "${CLOUDFLARE_AUTH_TOKEN:-}" ] && [ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
-            echo "✓ Using Cloudflare model: ${CLOUDFLARE_MODEL}"
-            MODEL_VALUE="${CLOUDFLARE_MODEL}"
-          elif command -v opencode >/dev/null 2>&1; then
-            echo "✓ Falling back to OpenCode free model"
-            MODEL_VALUE="${OPENCODE_MODEL:-big-pickle}"
-          elif [ -n "${GOOGLE_GENERATIVE_AI_API_KEY:-}" ] || [ -n "${GOOGLE_API_KEY:-}" ]; then
-            echo "✓ Falling back to Gemini model"
-            MODEL_VALUE="gemini-2.5-flash"
-          else
-            echo "ERROR: aucun secret de modèle trouvé"
-            exit 1
-          fi
+const run = async () => {
+    if (args.includes("--version") || args.includes("-v")) {
+        console.log(`autospec version ${version}`);
+        process.exit(0);
+    }
 
-          export GOOGLE_GENERATIVE_AI_API_KEY="${GOOGLE_GENERATIVE_AI_API_KEY:-$GOOGLE_API_KEY}"
-          export GOOGLE_API_KEY="${GOOGLE_API_KEY:-$GOOGLE_GENERATIVE_AI_API_KEY}"
-          export CLOUDFLARE_AUTH_TOKEN="${CLOUDFLARE_AUTH_TOKEN:-}"
-          export CLOUDFLARE_ACCOUNT_ID="${CLOUDFLARE_ACCOUNT_ID:-}"
-          export CLOUDFLARE_MODEL="${CLOUDFLARE_MODEL:-@cf/zai-org/glm-4.7-flash}"
-          export OPENCODE_MODEL="${OPENCODE_MODEL:-big-pickle}"
+    const { testUrl, modelName, planModelName, specLimit, apiKey, specFile, trajectoriesPath } = await getVars();
+    if (!apiKey) {
+        console.warn(
+            "Warning: No API key provided. Falling back to environment variables.",
+        );
+    }
+    const { testResults } = await main({
+        testUrl,
+        modelName,
+        planModelName,
+        specLimit:
+            typeof specLimit == "string" ? parseInt(specLimit) : specLimit,
+        apiKey,
+        specFile,
+        trajectoriesPath,
+    });
+    process.exit(
+        testResults.every((result) => result.status === "passed") ? 0 : 1,
+    );
+};
 
-          # Construire les arguments autospec
-          AUTOSPEC_ARGS="--url '$TARGET_URL' --model '$MODEL_VALUE' --spec_limit '$SPEC_LIMIT' --trajectories-path '$GITHUB_WORKSPACE/trajectories'"
-          
-          if [ -n "${PLAN_MODEL_INPUT}" ]; then
-            AUTOSPEC_ARGS="$AUTOSPEC_ARGS --plan_model '$PLAN_MODEL_INPUT'"
-          fi
-
-          cd "$GITHUB_WORKSPACE/autospec"
-          eval "node build/src/cli.js $AUTOSPEC_ARGS" 2>&1 | tee "$GITHUB_WORKSPACE/autospec.log"
-
-          EXIT_CODE=$?
-
-          if [ $EXIT_CODE -eq 0 ]; then
-            echo "✓ AutoSpec exécuté avec succès"
-          else
-            echo "⚠ AutoSpec terminé avec code $EXIT_CODE"
-          fi
-
-          echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
-
-      - name: Compter les spec files générés
-        id: count
-        shell: bash
-        run: |
-          TRAJ_PATH="${GITHUB_WORKSPACE}/trajectories"
-          SPEC_COUNT=$(find "$TRAJ_PATH" -name "*.spec.js" 2>/dev/null | wc -l)
-          VIDEO_COUNT=$(find "$TRAJ_PATH" -name "*.webm" 2>/dev/null | wc -l)
-          SCREENSHOT_COUNT=$(find "$TRAJ_PATH" -name "*.png" 2>/dev/null | wc -l)
-          
-          echo "spec_count=$SPEC_COUNT" >> "$GITHUB_OUTPUT"
-          echo "video_count=$VIDEO_COUNT" >> "$GITHUB_OUTPUT"
-          echo "screenshot_count=$SCREENSHOT_COUNT" >> "$GITHUB_OUTPUT"
-          
-          echo ""
-          echo "📊 Résultats:"
-          echo "  - Specs (.spec.js) : $SPEC_COUNT"
-          echo "  - Vidéos (.webm) : $VIDEO_COUNT"
-          echo "  - Screenshots (.png) : $SCREENSHOT_COUNT"
-
-      - name: Archiver les résultats (trajectories)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: autospec-trajectories-${{ needs.resolve-url.outputs.site_id }}
-          path: ${{ github.workspace }}/trajectories/
-          retention-days: 30
-          if-no-files-found: ignore
-
-      - name: Archiver les logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: autospec-logs-${{ needs.resolve-url.outputs.site_id }}
-          path: autospec.log
-          retention-days: 7
-          if-no-files-found: ignore
-
-      - name: Envoyer le rapport au relay
-        if: always()
-        env:
-          SITE_ID: ${{ needs.resolve-url.outputs.site_id }}
-          RELAY_URL: ${{ secrets.RELAY_URL }}
-          RELAY_SECRET: ${{ secrets.RELAY_SECRET }}
-          SPEC_COUNT: ${{ steps.count.outputs.spec_count }}
-          VIDEO_COUNT: ${{ steps.count.outputs.video_count }}
-          SCREENSHOT_COUNT: ${{ steps.count.outputs.screenshot_count }}
-        shell: bash
-        run: |
-          set +e
-          
-          if [ -z "${RELAY_URL:-}" ]; then
-            echo "⚠ RELAY_URL absent, rapport ignoré"
-            exit 0
-          fi
-          
-          PAYLOAD=$(jq -nc \
-            --arg site_id "$SITE_ID" \
-            --argjson spec_count "$SPEC_COUNT" \
-            --argjson video_count "$VIDEO_COUNT" \
-            --argjson screenshot_count "$SCREENSHOT_COUNT" \
-            '{
-              site_id: $site_id,
-              spec_count: $spec_count,
-              video_count: $video_count,
-              screenshot_count: $screenshot_count,
-              timestamp: now | todate
-            }')
-          
-          curl -sS --retry 3 -X POST "$RELAY_URL/sites/$SITE_ID/autospec-report" \
-            -H "x-relay-secret: $RELAY_SECRET" \
-            -H "Content-Type: application/json" \
-            -d "$PAYLOAD" || echo "⚠ Envoi rapport échoué"
-
-      - name: Résumé
-        if: always()
-        shell: bash
-        run: |
-          {
-            echo "## 🎭 AutoSpec Playwright"
-            echo ""
-            echo "| Propriété | Valeur |"
-            echo "| --- | --- |"
-            echo "| **URL** | \`${{ needs.resolve-url.outputs.url }}\` |"
-            echo "| **Site** | ${{ needs.resolve-url.outputs.site_name }} |"
-            echo "| **Specs** | ${{ steps.count.outputs.spec_count }} ✓ |"
-            echo "| **Vidéos** | ${{ steps.count.outputs.video_count }} 📹 |"
-            echo "| **Screenshots** | ${{ steps.count.outputs.screenshot_count }} 📸 |"
-            echo ""
-          } >> "$GITHUB_STEP_SUMMARY"
+run().catch(console.error);
