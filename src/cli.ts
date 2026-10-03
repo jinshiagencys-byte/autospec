@@ -28,6 +28,7 @@ if (args.includes("--help") || args.includes("-h")) {
                           * "gpt-5.4"
                           * "gemini-2.5-flash"
                           * "cloudflare" or "cloudflare:<model-name>"
+                          * "opencode" or "opencode:<model-name>" (default: big-pickle)
     --apikey <key>       The relevant API key for the chosen model's API.
                           * If not specified, we'll fall back on the
                             following environment variables:
@@ -35,12 +36,16 @@ if (args.includes("--help") || args.includes("-h")) {
                             * GOOGLE_GENERATIVE_AI_API_KEY
                             * ANTHROPIC_API_KEY
                             * CLOUDFLARE_API_TOKEN / CLOUDFLARE_API_KEY
+                            * OPENCODE_MODEL (no API key required)
     --specFile <file>    Path to the file containing specs to run.
                          Use "-" to read from stdin.
         Cloudflare requirements:
             CLOUDFLARE_ACCOUNT_ID
-            CLOUDFLARE_GATEWAY
-            CLOUDFLARE_MODEL (optional, default: @cf/zai-org/glm-4.7-flash)
+            CLOUDFLARE_AUTH_TOKEN
+            CLOUDFLARE_MODEL (optional, default: @cf/meta/llama-3.1-8b-fast-v2)
+        OpenCode requirements:
+            npm install -g opencode-ai
+            OPENCODE_MODEL (optional, default: big-pickle)
     `);
     process.exit(0);
 }
@@ -51,6 +56,7 @@ const getInteractiveInput = async () => {
         "gpt-5.4",
         "gemini-2.5-flash",
         "cloudflare",
+        "opencode",
     ];
 
     const testUrl = await input({
