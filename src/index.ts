@@ -13,6 +13,7 @@ export { magicStrings } from "./schemas.js";
 export async function main({
     testUrl = process.env.URL || "http://localhost:3000",
     modelName: unvalidatedModelName = process.env.MODEL || "claude-opus-4-6",
+    planModelName,
     specLimit = process.env.SPEC_LIMIT
         ? parseInt(process.env.SPEC_LIMIT)
         : 10,
@@ -25,6 +26,7 @@ export async function main({
 }: {
     testUrl?: string;
     modelName?: string;
+    planModelName?: string;
     specLimit?: number;
     apiKey?: string;
     specFile?: string;
@@ -45,8 +47,14 @@ export async function main({
     modelNameSchema.parse(unvalidatedModelName);
     const modelName = unvalidatedModelName as string;
 
+    // Resolve plan model (defaults to execution model if not specified)
+    const resolvedPlanModelName = planModelName ?? modelName;
+    modelNameSchema.parse(resolvedPlanModelName);
+
+    // API key is only needed for the execution model (plan model doesn't use tools)
     validateApiKey({ modelName, apiKey });
     const model = getModel({ modelName, apiKey });
+    const planModel = getModel({ modelName: resolvedPlanModelName });
 
     const browser =
         browserPassThrough || (await playwright.chromium.launch());
@@ -83,31 +91,29 @@ export async function main({
 
             const planResult = await createTestPlan({
                 snapshots,
-                model,
+                model: planModel,
             });
             testPlan = planResult.testPlan;
             totalInputTokens += planResult.promptTokens;
             totalOutputTokens += planResult.completionTokens;
         }
 
-        console.log(
-            `Running ${Math.min(testPlan.length, specLimit)} specs...\n`,
-        );
+        const specsToRun = testPlan.slice(0, specLimit);
+        console.log(`Running ${specsToRun.length} specs...\n`);
 
         // Each spec gets its own context via runTestSpec → initializeBrowser
-        const specPromises = testPlan.slice(0, specLimit).map((spec) =>
-            runTestSpec({
-                runId,
-                spec,
-                browser,
-                model,
-                testUrl,
-                trajectoriesPath,
-                recordVideo,
-            }),
-        );
-
-        const results = await Promise.all(specPromises);
+        // Control concurrency via SPEC_CONCURRENCY env var (default 2)
+        const maxConcurrency = parseInt(process.env.SPEC_CONCURRENCY ?? "2", 10);
+        const results = await runSpecsWithConcurrency({
+            specs: specsToRun,
+            maxConcurrency,
+            runId,
+            browser,
+            model,
+            testUrl,
+            trajectoriesPath,
+            recordVideo,
+        });
         testResults.push(...results);
 
         for (const r of results) {
@@ -133,6 +139,59 @@ export async function main({
     }
 }
 
+async function runSpecsWithConcurrency({
+    specs,
+    maxConcurrency,
+    runId,
+    browser,
+    model,
+    testUrl,
+    trajectoriesPath,
+    recordVideo,
+}: {
+    specs: string[];
+    maxConcurrency: number;
+    runId: string;
+    browser: Browser;
+    model: any;
+    testUrl: string;
+    trajectoriesPath: string;
+    recordVideo: boolean;
+}): Promise<TestResult[]> {
+    const results: TestResult[] = [];
+    const queue = [...specs];
+    const running = new Set<Promise<void>>();
+
+    while (queue.length > 0 || running.size > 0) {
+        while (running.size < maxConcurrency && queue.length > 0) {
+            const spec = queue.shift()!;
+            const promise = runTestSpec({
+                runId,
+                spec,
+                browser,
+                model,
+                testUrl,
+                trajectoriesPath,
+                recordVideo,
+            })
+                .then((result) => {
+                    results.push(result);
+                })
+                .finally(() => {
+                    running.delete(promise);
+                });
+
+            running.add(promise);
+        }
+
+        if (running.size > 0) {
+            await Promise.race(running);
+        }
+    }
+
+    return results;
+}
+
 function validateApiKey({
     modelName,
     apiKey,
@@ -145,8 +204,18 @@ function validateApiKey({
     const envKeys: Record<string, string> = {
         "gpt-5.4": "OPENAI_API_KEY",
         "claude-opus-4-6": "ANTHROPIC_API_KEY",
-        "gemini-2.5-flash": "GOOGLE_GENERATIVE_AI_API_KEY",
     };
+
+    // Handle gemini-* models dynamically
+    if (modelName.startsWith("gemini-") || modelName === "gemini") {
+        if (!process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
+            throw new Error(
+                `No API key provided for ${modelName}. ` +
+                    `Pass --apikey or set the GOOGLE_GENERATIVE_AI_API_KEY environment variable.`,
+            );
+        }
+        return;
+    }
 
     const envKey = envKeys[modelName];
     if (envKey && !process.env[envKey]) {
