@@ -37,10 +37,10 @@ if (args.includes("--help") || args.includes("-h")) {
                             * CLOUDFLARE_API_TOKEN / CLOUDFLARE_API_KEY
     --specFile <file>    Path to the file containing specs to run.
                          Use "-" to read from stdin.
-    Cloudflare requirements:
-      CLOUDFLARE_ACCOUNT_ID
-      CLOUDFLARE_GATEWAY
-      CLOUDFLARE_MODEL (optional, default: @cf/meta/llama-3.1-8b-fast-v2)
+        Cloudflare requirements:
+            CLOUDFLARE_ACCOUNT_ID
+            CLOUDFLARE_GATEWAY
+            CLOUDFLARE_MODEL (optional, default: @cf/zai-org/glm-4.7-flash)
     `);
     process.exit(0);
 }
