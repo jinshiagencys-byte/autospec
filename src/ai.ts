@@ -51,6 +51,35 @@ function getCloudflarePromptText(value: unknown): string {
     return "";
 }
 
+function formatCloudflareMessages(prompt: unknown): string {
+    if (typeof prompt === "string") {
+        return prompt;
+    }
+
+    if (Array.isArray(prompt)) {
+        return prompt
+            .map((message) => {
+                if (!message || typeof message !== "object") {
+                    return "";
+                }
+
+                const role =
+                    typeof (message as Record<string, unknown>).role === "string"
+                        ? (message as Record<string, unknown>).role
+                        : "user";
+                const content = getCloudflarePromptText(
+                    (message as Record<string, unknown>).content ?? message,
+                );
+
+                return content ? `${role}:\n${content}` : "";
+            })
+            .filter(Boolean)
+            .join("\n\n");
+    }
+
+    return getCloudflarePromptText(prompt);
+}
+
 function getCloudflareModelConfig(modelName: string, apiKey?: string) {
     const cloudflareApiKey = getCloudflareToken(apiKey);
     const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
@@ -76,18 +105,13 @@ function getCloudflareModelConfig(modelName: string, apiKey?: string) {
             : modelName.replace(/^cloudflare[:/]/, "").replace(/^@cf\//, "@cf/");
 
     return {
-        specificationVersion: "v1",
+        specificationVersion: "v2",
         provider: "cloudflare",
         modelId: resolvedModel,
-        defaultObjectGenerationMode: "json",
-        supportsStructuredOutputs: true,
-        async doGenerate({ system, prompt }: { system?: string; prompt: unknown }) {
-            const fullPrompt = [
-                system ? `System:\n${system}` : "",
-                getCloudflarePromptText(prompt),
-            ]
-                .filter(Boolean)
-                .join("\n\n");
+        supportedUrls: {},
+
+        async doGenerate({ prompt }: { prompt: unknown }) {
+            const fullPrompt = formatCloudflareMessages(prompt);
 
             const response = await fetch(
                 `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/${resolvedModel}`,
@@ -111,27 +135,27 @@ function getCloudflareModelConfig(modelName: string, apiKey?: string) {
                 throw new Error(message);
             }
 
-            const text =
+            const raw =
                 data?.result?.response ??
                 data?.result?.text ??
                 data?.result ??
                 "";
+            const text = typeof raw === "string" ? raw : JSON.stringify(raw);
 
             return {
-                text: typeof text === "string" ? text : JSON.stringify(text),
+                content: [{ type: "text", text }],
                 finishReason: "stop",
                 usage: {
-                    promptTokens: 0,
-                    completionTokens: 0,
-                    totalTokens: 0,
-                },
-                rawCall: {
-                    rawPrompt: fullPrompt,
-                    rawResponse: data,
+                    inputTokens: undefined,
+                    outputTokens: undefined,
+                    totalTokens: undefined,
                 },
                 warnings: [],
+                request: { body: fullPrompt },
+                response: { body: data },
             };
         },
+
         async doStream() {
             throw new Error(
                 "Streaming is not supported for Cloudflare direct model in this project.",
