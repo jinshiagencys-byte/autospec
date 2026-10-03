@@ -15,7 +15,7 @@ const getArgValue = <T>(argName: string, defaultValue: T) => {
 
 if (args.includes("--help") || args.includes("-h")) {
     console.log(`
-    Usage: npx autospecai --url <url> [--model <model>] [--spec_limit <limit>] [--specFile <file>] [--help | -h]
+    Usage: npx autospecai --url <url> [--model <model>] [--plan_model <model>] [--spec_limit <limit>] [--specFile <file>] [--help | -h]
 
     Required:
     --url <url>          The target URL to run the autospec tests against.
@@ -23,20 +23,23 @@ if (args.includes("--help") || args.includes("-h")) {
     Optional:
     --help, -h           Show this help message.
     --spec_limit <limit> The max number of specs to generate. Default 10.
-    --model <model>      The model to use for spec generation
+    --model <model>      The model to use for test execution (with tool calling support)
                           * "claude-opus-4-6" (default)
                           * "gpt-5.4"
-                          * "gemini-2.5-flash"
+                          * "gemini-2.5-flash" or "gemini-3.1-flash-lite"
                           * "cloudflare" or "cloudflare:<model-name>"
                           * "opencode" or "opencode:<model-name>" (default: big-pickle)
-    --apikey <key>       The relevant API key for the chosen model's API.
+    --plan_model <model> The model to use for test planning only (no tool calling required).
+                          If not provided, defaults to --model.
+                          Useful for cheaper models: "gemini-2.5-flash", etc.
+    --apikey <key>       The relevant API key for the execution model's API.
                           * If not specified, we'll fall back on the
                             following environment variables:
-                            * OPENAI_API_KEY
-                            * GOOGLE_GENERATIVE_AI_API_KEY
-                            * ANTHROPIC_API_KEY
-                            * CLOUDFLARE_API_TOKEN / CLOUDFLARE_API_KEY
-                            * OPENCODE_MODEL (no API key required)
+                            * OPENAI_API_KEY (for gpt-5.4)
+                            * GOOGLE_GENERATIVE_AI_API_KEY (for gemini-*)
+                            * ANTHROPIC_API_KEY (for claude-*)
+                            * CLOUDFLARE_AUTH_TOKEN (for cloudflare)
+                            * OPENCODE_MODEL (no API key required for opencode)
     --specFile <file>    Path to the file containing specs to run.
                          Use "-" to read from stdin.
         Cloudflare requirements:
@@ -85,6 +88,7 @@ const getInteractiveInput = async () => {
     return {
         testUrl,
         modelName,
+        planModelName: undefined,
         specLimit: parseInt(specLimit, 10) || 10,
         apiKey,
         specFile: specFile || undefined,
@@ -102,6 +106,10 @@ const getVars = async () => {
                 "--model",
                 "claude-opus-4-6",
             ),
+            planModelName: getArgValue<string | undefined>(
+                "--plan_model",
+                undefined,
+            ),
             specLimit: getArgValue<string | number>("--spec_limit", 10),
             apiKey: getArgValue<string | undefined>("--apikey", undefined),
             specFile: getArgValue<string | undefined>("--specFile", undefined),
@@ -115,7 +123,7 @@ const run = async () => {
         process.exit(0);
     }
 
-    const { testUrl, modelName, specLimit, apiKey, specFile } = await getVars();
+    const { testUrl, modelName, planModelName, specLimit, apiKey, specFile } = await getVars();
     if (!apiKey) {
         console.warn(
             "Warning: No API key provided. Falling back to environment variables.",
@@ -124,6 +132,7 @@ const run = async () => {
     const { testResults } = await main({
         testUrl,
         modelName,
+        planModelName,
         specLimit:
             typeof specLimit == "string" ? parseInt(specLimit) : specLimit,
         apiKey,
