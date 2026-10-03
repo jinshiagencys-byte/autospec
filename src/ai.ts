@@ -24,7 +24,7 @@ function getCloudflareModelConfig(modelName: string, apiKey?: string) {
     const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
     const defaultModel =
         process.env.CLOUDFLARE_MODEL ||
-        "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+        "@cf/meta/llama-3.1-8b-fast-v2";
 
     if (!cloudflareApiKey) {
         throw new Error(
