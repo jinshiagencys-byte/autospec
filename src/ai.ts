@@ -187,14 +187,120 @@ function getOpenCodeModelConfig(modelName: string): ModelInstance {
     };
 
     return {
-        modelId: resolvedModel,
+        specificationVersion: "v2",
         provider: "opencode",
-        doGenerate: async ({ prompt, system, responseFormat }: any) =>
-            runModel(prompt, system, responseFormat),
-        doStream: async () => {
-            throw new Error("OpenCode provider does not support streaming.");
+        modelId: resolvedModel,
+        supportedUrls: {},
+        doGenerate: async ({ prompt, system, messages, responseFormat }: any) => {
+            const requestBody = messages ?? [
+                ...(system ? [{ role: "system", content: system }] : []),
+                { role: "user", content: prompt ?? "" },
+            ];
+
+            let attempt = 0;
+            while (attempt <= 1) {
+                const cwd = mkdtempSync(join(tmpdir(), "autospec-opencode-"));
+                try {
+                    const args = ["run", "-m", resolvedModel];
+                    if (supportsJsonOutput()) {
+                        args.push("--output", "json");
+                    }
+
+                    const child = spawn("opencode", args, {
+                        cwd,
+                        stdio: ["pipe", "pipe", "pipe"],
+                        env: {
+                            ...process.env,
+                            NO_COLOR: "1",
+                        },
+                    });
+
+                    let stdout = "";
+                    let stderr = "";
+                    child.stdout?.on("data", (chunk) => {
+                        stdout += chunk.toString();
+                    });
+                    child.stderr?.on("data", (chunk) => {
+                        stderr += chunk.toString();
+                    });
+
+                    const timer = setTimeout(() => {
+                        child.kill("SIGKILL");
+                    }, 120_000);
+
+                    const rawPrompt = requestBody
+                        .map((m: any) => {
+                            const content =
+                                typeof m.content === "string"
+                                    ? m.content
+                                    : JSON.stringify(m.content ?? "");
+                            return `${m.role ?? "user"}:\n${content}`;
+                        })
+                        .join("\n\n");
+
+                    const finalPrompt = responseFormat?.type === "json"
+                        ? `${rawPrompt}\n\nReturn only valid JSON. Do not wrap it in markdown fences.\nSchema:\n${JSON.stringify(responseFormat.schema ?? {}, null, 2)}`
+                        : rawPrompt;
+
+                    child.stdin?.write(finalPrompt);
+                    child.stdin?.end();
+
+                    const exitCode = await new Promise<number | null>((resolve, reject) => {
+                        child.on("error", (error) => reject(error));
+                        child.on("close", (code) => resolve(code ?? null));
+                    });
+
+                    clearTimeout(timer);
+                    rmSync(cwd, { recursive: true, force: true });
+
+                    const outputText = stripOpenCodeNoise(stdout || stderr || "");
+                    const normalizedText =
+                        responseFormat?.type === "json"
+                            ? unwrapEchoedSchema(outputText)
+                            : outputText;
+
+                    console.info(
+                        `[opencode] model=${resolvedModel} exitCode=${exitCode ?? "n/a"}`,
+                    );
+
+                    if (exitCode !== 0) {
+                        throw new Error(
+                            `opencode CLI failed for ${resolvedModel} (exit ${exitCode ?? "unknown"}): ${stderr || outputText || "No output"}`,
+                        );
+                    }
+
+                    return {
+                        content: [{ type: "text", text: normalizedText || "" }],
+                        finishReason: "stop",
+                        usage: {
+                            inputTokens: undefined,
+                            outputTokens: undefined,
+                            totalTokens: undefined,
+                        },
+                        warnings: [],
+                        request: { body: requestBody },
+                        response: { body: { raw: normalizedText || "" } },
+                    };
+                } catch (error) {
+                    rmSync(cwd, { recursive: true, force: true });
+                    if (attempt === 1) {
+                        const message =
+                            error instanceof Error ? error.message : String(error);
+                        if (message.includes("ENOENT")) {
+                            throw new Error("opencode CLI introuvable, installe opencode-ai");
+                        }
+                        throw new Error(`OpenCode provider failed after retry: ${message}`);
+                    }
+                    attempt += 1;
+                }
+            }
+
+            throw new Error(`OpenCode provider failed unexpectedly for ${resolvedModel}`);
         },
-    } as any;
+        doStream: async () => {
+            throw new Error("Streaming is not supported for opencode provider.");
+        },
+    } as any as ModelInstance;
 }
 
 function getCloudflareToken(apiKey?: string) {
