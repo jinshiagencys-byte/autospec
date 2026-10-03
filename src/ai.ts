@@ -68,6 +68,34 @@ function supportsOpenCodeJsonOutput(): boolean {
     }
 }
 
+function parseOpencodeEvents(raw: string) {
+    let text = "";
+    let usage: { input?: number; output?: number; total?: number } = {};
+
+    for (const line of raw.split("\n")) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith("{")) continue;
+
+        try {
+            const event = JSON.parse(trimmed);
+            if (event.type === "text" && typeof event.part?.text === "string") {
+                text += event.part.text;
+            } else if (event.type === "step_finish" && event.part?.tokens) {
+                const tokens = event.part.tokens;
+                usage = {
+                    input: tokens.input,
+                    output: tokens.output,
+                    total: tokens.total,
+                };
+            }
+        } catch {
+            // ignore non-JSON noise
+        }
+    }
+
+    return { text, usage };
+}
+
 function getOpenCodeModelConfig(modelName: string): ModelInstance {
     const resolvedModel = resolveOpenCodeModelName(modelName);
     const cliModel = resolvedModel.includes("/")
@@ -139,12 +167,28 @@ function getOpenCodeModelConfig(modelName: string): ModelInstance {
                     clearTimeout(timer);
                     rmSync(cwd, { recursive: true, force: true });
 
-                    const rawOutput = stdout || stderr || "";
-                    const outputText = stripOpenCodeNoise(rawOutput);
-                    const normalizedText =
-                        responseFormat?.type === "json"
-                            ? unwrapEchoedSchema(outputText)
-                            : outputText;
+                    const cliOutput = stdout || stderr || "";
+                    const { text: rawText, usage } = parseOpencodeEvents(cliOutput);
+
+                    let text = rawText
+                        .replace(/\x1b\[[0-9;]*m/g, "")
+                        .replace(/<think>[\s\S]*?<\/think>/g, "")
+                        .trim();
+
+                    if (!text) {
+                        throw new Error(
+                            `opencode: aucune réponse texte. Début de sortie: ${cliOutput.slice(0, 400)}`,
+                        );
+                    }
+
+                    if (responseFormat?.type === "json") {
+                        const start = text.indexOf("{");
+                        const end = text.lastIndexOf("}");
+                        if (start !== -1 && end > start) {
+                            text = text.slice(start, end + 1);
+                        }
+                        text = unwrapEchoedSchema(text);
+                    }
 
                     console.info(
                         `[opencode] model=${resolvedModel} exitCode=${exitCode ?? "n/a"}`,
@@ -152,21 +196,21 @@ function getOpenCodeModelConfig(modelName: string): ModelInstance {
 
                     if (exitCode !== 0) {
                         throw new Error(
-                            `opencode CLI failed for ${resolvedModel} (exit ${exitCode ?? "unknown"}): ${stderr || outputText || "No output"}`,
+                            `opencode CLI failed for ${resolvedModel} (exit ${exitCode ?? "unknown"}): ${stderr || cliOutput || "No output"}`,
                         );
                     }
 
                     return {
-                        content: [{ type: "text", text: normalizedText || "" }],
+                        content: [{ type: "text", text }],
                         finishReason: "stop",
                         usage: {
-                            inputTokens: undefined,
-                            outputTokens: undefined,
-                            totalTokens: undefined,
+                            inputTokens: usage.input,
+                            outputTokens: usage.output,
+                            totalTokens: usage.total,
                         },
                         warnings: [],
-                        request: { body: requestBody },
-                        response: { body: { raw: normalizedText || "" } },
+                        request: { body: promptText },
+                        response: { body: { raw: cliOutput } },
                     };
                 } catch (error) {
                     rmSync(cwd, { recursive: true, force: true });
