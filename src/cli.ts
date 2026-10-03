@@ -40,7 +40,7 @@ if (args.includes("--help") || args.includes("-h")) {
     Cloudflare requirements:
       CLOUDFLARE_ACCOUNT_ID
       CLOUDFLARE_GATEWAY
-      CLOUDFLARE_MODEL (optional, default: @cf/meta/llama-3.3-70b-instruct-fp8-fast)
+      CLOUDFLARE_MODEL (optional, default: @cf/meta/llama-3.1-8b-fast-v2)
     `);
     process.exit(0);
 }
