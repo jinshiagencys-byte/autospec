@@ -304,20 +304,19 @@ function getCloudflareModelConfig(modelName: string, apiKey?: string): ModelInst
 
 function getOllamaModelConfig(modelName: string, apiKey?: string): ModelInstance {
     const token = apiKey || process.env.OLLAMA_API_KEY;
-    const defaultModel = process.env.OLLAMA_MODEL || "gpt-oss:120b";
-    const resolvedModel =
-        modelName === "ollama" ? defaultModel : modelName.replace(/^ollama:/, "");
-
     if (!token) {
         throw new Error("OLLAMA_API_KEY manquant.");
     }
 
-    const baseModel = createOpenAI({
+    const resolved =
+        modelName === "ollama"
+            ? process.env.OLLAMA_MODEL || "gpt-oss:120b"
+            : modelName.replace(/^ollama[:/]/, "");
+
+    return createOpenAI({
         apiKey: token,
         baseURL: "https://ollama.com/v1",
-    }).chat(resolvedModel);
-
-    return wrapModelWithToolCheck(baseModel, "Ollama");
+    }).chat(resolved);
 }
 
 export function getModel({
