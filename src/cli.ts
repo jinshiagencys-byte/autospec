@@ -15,7 +15,7 @@ const getArgValue = <T>(argName: string, defaultValue: T) => {
 
 if (args.includes("--help") || args.includes("-h")) {
     console.log(`
-    Usage: npx autospecai --url <url> [--model <model>] [--plan_model <model>] [--spec_limit <limit>] [--specFile <file>] [--help | -h]
+    Usage: npx autospecai --url <url> [--model <model>] [--plan_model <model>] [--spec_limit <limit>] [--specFile <file>] [--trajectories-path <path>] [--help | -h]
 
     Required:
     --url <url>          The target URL to run the autospec tests against.
@@ -23,6 +23,7 @@ if (args.includes("--help") || args.includes("-h")) {
     Optional:
     --help, -h           Show this help message.
     --spec_limit <limit> The max number of specs to generate. Default 10.
+    --trajectories-path <path> Path to store trajectories, videos, and specs. Default: ./trajectories
     --model <model>      The model to use for test execution (with tool calling support)
                           * "claude-opus-4-6" (default)
                           * "gpt-5.4"
@@ -92,6 +93,7 @@ const getInteractiveInput = async () => {
         specLimit: parseInt(specLimit, 10) || 10,
         apiKey,
         specFile: specFile || undefined,
+        trajectoriesPath: undefined,
     };
 };
 
@@ -113,6 +115,10 @@ const getVars = async () => {
             specLimit: getArgValue<string | number>("--spec_limit", 10),
             apiKey: getArgValue<string | undefined>("--apikey", undefined),
             specFile: getArgValue<string | undefined>("--specFile", undefined),
+            trajectoriesPath: getArgValue<string | undefined>(
+                "--trajectories-path",
+                undefined,
+            ),
         };
     }
 };
@@ -123,7 +129,7 @@ const run = async () => {
         process.exit(0);
     }
 
-    const { testUrl, modelName, planModelName, specLimit, apiKey, specFile } = await getVars();
+    const { testUrl, modelName, planModelName, specLimit, apiKey, specFile, trajectoriesPath } = await getVars();
     if (!apiKey) {
         console.warn(
             "Warning: No API key provided. Falling back to environment variables.",
@@ -137,6 +143,7 @@ const run = async () => {
             typeof specLimit == "string" ? parseInt(specLimit) : specLimit,
         apiKey,
         specFile,
+        trajectoriesPath,
     });
     process.exit(
         testResults.every((result) => result.status === "passed") ? 0 : 1,
