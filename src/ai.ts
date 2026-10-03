@@ -108,7 +108,14 @@ function getOpenCodeModelConfig(modelName: string): ModelInstance {
         provider: "opencode",
         modelId: resolvedModel,
         supportedUrls: {},
-        async doGenerate({ prompt, system, messages, responseFormat }: any) {
+        async doGenerate({ prompt, system, messages, responseFormat, tools }: any) {
+            // OpenCode CLI does not support tool calling
+            if (tools && Object.keys(tools).length > 0) {
+                throw new Error(
+                    "OpenCode provider does not support tool calling. Use a model like Gemini, OpenAI, or Anthropic for --model that supports the agentic features.",
+                );
+            }
+
             const requestBody = messages ?? [
                 ...(system ? [{ role: "system", content: system }] : []),
                 { role: "user", content: prompt ?? "" },
@@ -138,13 +145,17 @@ function getOpenCodeModelConfig(modelName: string): ModelInstance {
                     }
                     args.push(finalPrompt || " ");
 
+                    // Minimal environment: only PATH and HOME to avoid leaking secrets
+                    const minimalEnv: Record<string, string> = {
+                        PATH: process.env.PATH || "/usr/local/bin:/usr/bin:/bin",
+                        HOME: process.env.HOME || "/tmp",
+                        NO_COLOR: "1",
+                    };
+
                     const child = spawn("opencode", args, {
                         cwd,
                         stdio: ["ignore", "pipe", "pipe"],
-                        env: {
-                            ...process.env,
-                            NO_COLOR: "1",
-                        },
+                        env: minimalEnv,
                     });
 
                     let stdout = "";
@@ -243,6 +254,28 @@ function getCloudflareToken(apiKey?: string) {
     );
 }
 
+function wrapModelWithToolCheck(model: ModelInstance, providerName: string): ModelInstance {
+    return {
+        ...model,
+        async doGenerate(options: any) {
+            if (options.tools && Object.keys(options.tools).length > 0) {
+                throw new Error(
+                    `${providerName} provider does not support tool calling. Use a model like Gemini, OpenAI, or Anthropic for --model that supports the agentic features.`,
+                );
+            }
+            return model.doGenerate(options);
+        },
+        async doStream(options: any) {
+            if (options.tools && Object.keys(options.tools).length > 0) {
+                throw new Error(
+                    `${providerName} provider does not support tool calling. Use a model like Gemini, OpenAI, or Anthropic for --model that supports the agentic features.`,
+                );
+            }
+            return model.doStream(options);
+        },
+    } as any as ModelInstance;
+}
+
 function getCloudflareModelConfig(modelName: string, apiKey?: string): ModelInstance {
     const token = getCloudflareToken(apiKey);
     const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
@@ -261,10 +294,12 @@ function getCloudflareModelConfig(modelName: string, apiKey?: string): ModelInst
     const resolvedModel =
         modelName === "cloudflare" ? defaultModel : modelName.replace(/^cloudflare[:/]/, "");
 
-    return createOpenAI({
+    const baseModel = createOpenAI({
         apiKey: token,
         baseURL: `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/v1`,
     }).chat(resolvedModel);
+
+    return wrapModelWithToolCheck(baseModel, "Cloudflare");
 }
 
 export function getModel({
@@ -274,23 +309,7 @@ export function getModel({
     modelName: string;
     apiKey?: string;
 }): ModelInstance {
-    const configs: Record<string, () => ModelInstance> = {
-        "gpt-5.4": () =>
-            createOpenAI({
-                apiKey: apiKey || process.env.OPENAI_API_KEY,
-            })("gpt-5.4"),
-        "claude-opus-4-6": () =>
-            createAnthropic({
-                apiKey: apiKey || process.env.ANTHROPIC_API_KEY,
-            })("claude-opus-4-6"),
-        "gemini-2.5-flash": () =>
-            createGoogleGenerativeAI({
-                apiKey: apiKey || process.env.GOOGLE_GENERATIVE_AI_API_KEY,
-            })("gemini-2.5-flash"),
-        cloudflare: () => getCloudflareModelConfig(modelName, apiKey),
-        opencode: () => getOpenCodeModelConfig(modelName),
-    };
-
+    // Handle Cloudflare models
     if (
         modelName === "cloudflare" ||
         modelName.startsWith("cloudflare:") ||
@@ -300,14 +319,34 @@ export function getModel({
         return getCloudflareModelConfig(modelName, apiKey);
     }
 
+    // Handle OpenCode models
     if (isOpenCodeModelName(modelName)) {
         return getOpenCodeModelConfig(modelName);
     }
 
+    // Handle Gemini models (supports dynamic model names like "gemini-3.1-flash-lite")
+    if (modelName === "gemini-2.5-flash" || modelName.startsWith("gemini-")) {
+        return createGoogleGenerativeAI({
+            apiKey: apiKey || process.env.GOOGLE_GENERATIVE_AI_API_KEY,
+        })(modelName);
+    }
+
+    // Handle predefined models
+    const configs: Record<string, () => ModelInstance> = {
+        "gpt-5.4": () =>
+            createOpenAI({
+                apiKey: apiKey || process.env.OPENAI_API_KEY,
+            })("gpt-5.4"),
+        "claude-opus-4-6": () =>
+            createAnthropic({
+                apiKey: apiKey || process.env.ANTHROPIC_API_KEY,
+            })("claude-opus-4-6"),
+    };
+
     const factory = configs[modelName];
     if (!factory) {
         throw new Error(
-            `Unknown model: ${modelName}. Supported: ${Object.keys(configs).join(", ")}, cloudflare, cloudflare:<model>, @cf/<model>, opencode, opencode:<model>`,
+            `Unknown model: ${modelName}. Supported: gpt-5.4, claude-opus-4-6, gemini-2.5-flash, gemini-3.1-flash-lite (or any gemini-*), cloudflare, cloudflare:<model>, @cf/<model>, opencode, opencode:<model>`,
         );
     }
     return factory();
