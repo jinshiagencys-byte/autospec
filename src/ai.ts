@@ -85,7 +85,7 @@ function getCloudflareModelConfig(modelName: string, apiKey?: string) {
     const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
     const defaultModel =
         process.env.CLOUDFLARE_MODEL ||
-        "@cf/meta/llama-3.1-8b-fast-v2";
+        "@cf/zai-org/glm-4.7-flash";
 
     if (!cloudflareApiKey) {
         throw new Error(
@@ -99,10 +99,16 @@ function getCloudflareModelConfig(modelName: string, apiKey?: string) {
         );
     }
 
-    const resolvedModel =
-        modelName === "cloudflare" || modelName === "@cf/zai-org/glm-4.7-flash"
-            ? defaultModel
-            : modelName.replace(/^cloudflare[:/]/, "").replace(/^@cf\//, "@cf/");
+    const resolvedModel = ((): string => {
+        if (
+            modelName === "cloudflare" ||
+            modelName === "glm" ||
+            modelName === "@cf/zai-org/glm-4.7-flash"
+        ) {
+            return defaultModel;
+        }
+        return modelName.replace(/^cloudflare[:/]/, "").replace(/^@cf\//, "@cf/");
+    })();
 
     return {
         specificationVersion: "v2",
